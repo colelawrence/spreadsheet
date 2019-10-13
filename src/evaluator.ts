@@ -108,7 +108,7 @@ let ${id} = r.combineLatest(
     case "op": {
       const id = "op" + ctx.nextId()
       const left = buildExprEvalBody(ctx, expr.left)
-      const right = buildExprEvalBody(ctx, expr.left)
+      const right = buildExprEvalBody(ctx, expr.right)
       return {
         id,
         body: `
