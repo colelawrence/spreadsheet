@@ -1,9 +1,9 @@
 import { BehaviorSubject, Observable, throwError, of } from "rxjs"
-import { map, mergeMap, take, debounceTime } from "rxjs/operators"
+import { map, mergeMap, take, debounceTime, catchError } from "rxjs/operators"
 import { COLUMN_TO_INDEX } from "./columns"
 import { createEvaluator } from "./evaluator"
 import { ColumnLocation, RowLocation, TablePosition } from "./parser"
-import { genId } from "./helpers"
+import { genId, dbg } from "./helpers"
 
 export type CellProperties = {
   expression: string
@@ -11,10 +11,17 @@ export type CellProperties = {
 
 export type CellValue = string | number | undefined
 export type CellView = {
-  display: string
-  value: CellValue
-  calculated: boolean
-}
+  formula: boolean
+} & (
+  | {
+      ok: true
+      display: string
+      value: CellValue
+    }
+  | {
+      ok: false
+      error: string
+    })
 
 type CellEditor = {
   $expressionValue: Observable<string>
@@ -56,6 +63,23 @@ export class Table {
     this.$rowOrder.next(rows)
   }
 
+  moveColumnAfter(colRef: ColRef, after: ColRef) {
+    // remove the col we are moving
+    const originals = this.$columnOrder.value.filter(
+      existingRef => existingRef !== colRef,
+    )
+    const tail = originals.splice(originals.indexOf(after) + 1)
+    this.$columnOrder.next([...originals, colRef, ...tail])
+  }
+
+  moveColumnBefore(colRef: ColRef, before: ColRef) {
+    const originals = this.$columnOrder.value.filter(
+      existingRef => existingRef !== colRef,
+    )
+    const tail = originals.splice(originals.indexOf(before))
+    this.$columnOrder.next([...originals, colRef, ...tail])
+  }
+
   private createCell(
     col: ColRef,
     row: RowRef,
@@ -69,11 +93,12 @@ export class Table {
     const calculate = this.evaluateCell.bind(this, col, row)
     const $view = $properties.pipe(mergeMap(calculate))
 
-    $properties.subscribe(properties => console.log({ col, row, properties }))
+    $properties.subscribe(properties => dbg("Prop", { col, row, properties }))
+    $view.subscribe(view => dbg("View", { col, row, view }))
 
     return {
       $properties: $properties.asObservable(),
-      $view: $view,
+      $view,
       editCell: () => {
         const $expressionValue = new BehaviorSubject(
           $properties.value.expression,
@@ -123,8 +148,17 @@ export class Table {
     row: RowRef,
     properties: CellProperties,
   ): Observable<CellView> {
-    const fn = createEvaluator(properties)
-    return fn(col, row, this.lookupColumn, this.lookupRow, this.getCellView)
+    try {
+      const fn = createEvaluator(properties)
+      return fn(col, row, this.lookupColumn, this.lookupRow, this.getCellView)
+    } catch (err) {
+      console.error("Failed to create evaluator", err)
+      return new BehaviorSubject<CellView>({
+        ok: false,
+        error: `Parse error\nFailed to parse [${properties.expression}]`,
+        formula: true,
+      })
+    }
   }
 
   lookupColumn = (

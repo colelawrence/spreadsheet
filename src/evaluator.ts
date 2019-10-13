@@ -2,6 +2,7 @@ import { BehaviorSubject, combineLatest, Observable, throwError } from "rxjs"
 import { map, mergeMap } from "rxjs/operators"
 import { ColumnLocation, ExprNode, parseCell, RowLocation } from "./parser"
 import { CellProperties, CellValue, CellView, ColRef, RowRef } from "./sheet"
+import { dbg } from "./helpers"
 
 export type EvaluatorFn = (
   fromCol: ColRef,
@@ -11,45 +12,40 @@ export type EvaluatorFn = (
   getCell: (col: ColRef, row: RowRef) => Observable<CellView>,
 ) => Observable<CellView>
 
-/** no comment */
+/** @throws / no comment */
 export function createEvaluator({ expression }: CellProperties): EvaluatorFn {
-  try {
-    let parsed = parseCell(expression)
+  let parsed = parseCell(expression)
 
-    switch (parsed.kind) {
-      case "empty":
-        return createEmptyEvaluatorFn()
-      case "number":
-      case "text":
-        return createSimpleEvaluatorFn(parsed.value)
-      case "expression":
-        return createExprEvaluatorFn(parsed.expression)
-      default:
-        const _exhaust: never = parsed
-        return _exhaust // exhaustive check
-    }
-  } catch (err) {
-    const message = `Failed to parse: [${expression}]`
-    console.error(message, err)
-    //@ts-ignore
-    return () => throwError(message)
+  switch (parsed.kind) {
+    case "empty":
+      return createEmptyEvaluatorFn()
+    case "number":
+    case "text":
+      return createSimpleEvaluatorFn(parsed.value)
+    case "expression":
+      return createExprEvaluatorFn(parsed.expression)
+    default:
+      const _exhaust: never = parsed
+      return _exhaust // exhaustive check
   }
 }
 
 function createSimpleEvaluatorFn(value: number | string): EvaluatorFn {
   const $value = new BehaviorSubject<CellView>({
+    ok: true,
     value,
     display: String(value),
-    calculated: false,
+    formula: false,
   })
   return () => $value.asObservable()
 }
 
 function createEmptyEvaluatorFn(): EvaluatorFn {
   const $value = new BehaviorSubject<CellView>({
+    ok: true,
     value: 0,
     display: "",
-    calculated: false,
+    formula: false,
   })
   return () => $value.asObservable()
 }
@@ -70,8 +66,9 @@ function createExprEvaluatorFn(expression: ExprNode): EvaluatorFn {
   const buildCtx = {
     nextId: () => `_${++i}`,
   }
-  const { body, id } = buildExprEvalBody(buildCtx, expression)
-  //@ts-ignore no comment...
+  const { body, id, refs } = buildExprEvalBody(buildCtx, expression)
+  dbg({ expression, id }, body)
+  //@ts-ignore powerful, but dangerous
   return new Function(
     "r",
     "$fromCol",
@@ -79,9 +76,36 @@ function createExprEvaluatorFn(expression: ExprNode): EvaluatorFn {
     "$lookupColumn",
     "$lookupRow",
     "$getCell",
-    `${body};\nreturn ${id}.pipe(r.map(cellView => ({ ...cellView, calculated: true })));`,
+    `${body};\nreturn ${id}.pipe(r.map(res => {
+      if (res.ok) {
+        return {
+          ok: true,
+          value: res.value,
+          display: String(res.value),
+          formula: true
+        }
+      } else {
+        return {
+          ok: false,
+          error: res.error,
+          formula: true
+        }
+      }
+    }));`,
   ).bind(null, r)
 }
+
+// Hypothetically, this would be the type that is shared between stages
+// it intentionally has overlap with CellView
+type ExprValue =
+  | {
+      ok: true
+      value: CellValue
+    }
+  | {
+      ok: false
+      error: string
+    }
 
 function buildExprEvalBody(ctx: BuildContext, expr: ExprNode): EvalBodyPart {
   switch (expr.kind) {
@@ -89,20 +113,39 @@ function buildExprEvalBody(ctx: BuildContext, expr: ExprNode): EvalBodyPart {
       const id = "lit" + ctx.nextId()
       return {
         id,
-        body: `let ${id} = (new r.BehaviorSubject(${expr.jsEvalLiteral})).asObservable();`,
+        refs: 0,
+        body: `let ${id} = new r.BehaviorSubject({ value: ${expr.jsEvalLiteral}, ok: true });`,
       }
     }
     case "reference": {
       const id = "ref" + ctx.nextId()
       return {
         id,
+        refs: 1,
         body: `
 let ${id} = r.combineLatest(
   $lookupColumn($fromCol, ${JSON.stringify(expr.column)}),
   $lookupRow($fromRow, ${JSON.stringify(expr.row)}),
 )
-  .pipe(r.mergeMap(([col, row]) => $getCell(col, row)))
-  .pipe(r.map(cellView => cellView.value));`,
+  .pipe(r.mergeMap(([col, row]) =>
+    (col === $fromCol && row === $fromRow)
+    ? new r.BehaviorSubject({
+      ok: false,
+      error: "Self-Reference\\nCells may not refer to its own value",
+    })
+    : $getCell(col, row)
+      .pipe(r.map(cellView => {
+        if (cellView.ok) {
+          return cellView
+        } else {
+          return {
+            ok: false,
+            error: 'Reference has error\\n' + cellView.error,
+          }
+        }
+      }))
+    
+  ));`,
       }
     }
     case "op": {
@@ -111,11 +154,31 @@ let ${id} = r.combineLatest(
       const right = buildExprEvalBody(ctx, expr.right)
       return {
         id,
+        refs: left.refs + right.refs,
         body: `
 ${left.body}
 ${right.body}
 let ${id} = r.combineLatest(${left.id}, ${right.id})
-  .pipe(r.map(([left, right]) => left ${expr.jsEvalOp} right));
+  .pipe(r.map(([left, right]) => {
+    if (left.ok && right.ok) {
+      try {
+        return {
+          ok: true,
+          value: left.value ${expr.jsEvalOp} right.value
+        }
+      } catch {
+        return {
+          ok: false,
+          error: "${expr.jsEvalOp} error\nCould not evaluate (" + left.value + " ${expr.jsEvalOp} " + right.value + ")"
+        }
+      }
+    } else {
+      return {
+        ok: false,
+        error: "Dependency has error"
+      }
+    }
+  }));
 `,
       }
     }
@@ -125,50 +188,8 @@ let ${id} = r.combineLatest(${left.id}, ${right.id})
   }
 }
 
-// example of a expression built
-function testExprEvaluatorFn(expression: ExprNode): EvaluatorFn {
-  return (
-    fromCol: ColRef,
-    fromRow: RowRef,
-    lookupColumn: (from: ColRef, to: ColumnLocation) => Observable<ColRef>,
-    lookupRow: (from: RowRef, to: RowLocation) => Observable<RowRef>,
-    getCell: (col: ColRef, row: RowRef) => Observable<CellView>,
-  ): Observable<CellView> => {
-    // let's say we were building the operators for $A1 + $B1
-    let __1: Observable<CellValue>
-    {
-      const _refCol: ColumnLocation = [0, "A"]
-      const _refRow: RowLocation = [1, 1]
-      //
-      __1 = combineLatest(
-        lookupColumn(fromCol, _refCol),
-        lookupRow(fromRow, _refRow),
-      )
-        .pipe(mergeMap(([col, row]) => getCell(col, row)))
-        .pipe(map(cellView => cellView.value))
-    }
-
-    let __2: Observable<CellValue>
-    {
-      const _refCol: ColumnLocation = [0, "A"]
-      const _refRow: RowLocation = [1, 1]
-      //
-      __2 = combineLatest(
-        lookupColumn(fromCol, _refCol),
-        lookupRow(fromRow, _refRow),
-      )
-        .pipe(mergeMap(([col, row]) => getCell(col, row)))
-        .pipe(map(cellView => cellView.value))
-    }
-
-    // @ts-ignore __1, __2
-    let __0 = combineLatest(__1, __2).pipe(map(([__1, __2]) => __1 + __2))
-
-    return __0
-  }
-}
-
 type EvalBodyPart = {
   id: string
+  refs: number
   body: string
 }

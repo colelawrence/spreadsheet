@@ -54,3 +54,6 @@ export function classnames(
 ): string {
   return names.filter(a => !!a).join(" ")
 }
+
+
+export const dbg = console.info.bind(console, '%cDebug', 'color: green')

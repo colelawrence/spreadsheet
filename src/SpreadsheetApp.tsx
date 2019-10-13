@@ -30,9 +30,32 @@ export function SpreadsheetApp({ table }: { table: Table }) {
           <th></th>
           <table.$columnOrder.react
             next={colRefs =>
-              COLUMNS_BY_INDEX.slice(0, colRefs.length).map(label => (
-                <th key={label}>{label}</th>
-              ))
+              colRefs.map((colRef, idx) => {
+                const label = COLUMNS_BY_INDEX[idx]
+                return (
+                  <th key={label}>
+                    {idx > 0 && (
+                      <a
+                        {...onEnterOrClick(() =>
+                          table.moveColumnBefore(colRef, colRefs[idx - 1]),
+                        )}
+                      >
+                        ←
+                      </a>
+                    )}
+                    {label}
+                    {idx < colRefs.length - 1 && (
+                      <a
+                        {...onEnterOrClick(() =>
+                          table.moveColumnAfter(colRef, colRefs[idx + 1]),
+                        )}
+                      >
+                        →
+                      </a>
+                    )}
+                  </th>
+                )
+              })
             }
           />
         </tr>
@@ -79,22 +102,29 @@ function CellController({ cell }: { cell: Cell }) {
     </td>
   ) : (
     <cell.$view.react
-      next={cellView => (
+      next={(cellView: CellView) => (
         <td
           className={classnames(
             "cell",
             "cell-display",
-            typeof cellView.value === "number" && "cell-display-number",
-            cellView.calculated && "cell-display-calculated",
+            cellView.ok &&
+              typeof cellView.value === "number" &&
+              "cell-display-number",
+            !cellView.ok && "cell-display-error",
+            cellView.formula && "cell-display-formula",
           )}
           {...onEnterOrClick(() => setEditing(EditingState.Editing))}
           ref={elt => {
+            // Recapture focus if next state has element focused
             if (editingState === EditingState.Focused && elt != null) {
               setTimeout(() => elt.focus(), 10)
             }
           }}
         >
-          {cellView.display}
+          {cellView.ok
+            ? cellView.display
+            : // TODO: rework error display layout
+              "🔥" + cellView.error.split(/\n/)[0]}
         </td>
       )}
     />
@@ -136,13 +166,14 @@ function CellEditor({
       />
       <edit.$expressionPreview.react
         next={(previewCellView: CellView | null) =>
-          previewCellView && (
-            <div className="preview">
-              <span className="cell-preview-value">
-                {previewCellView.value}
-              </span>
+          previewCellView &&
+          (previewCellView.ok ? (
+            <div className="cell-preview">{previewCellView.value}</div>
+          ) : (
+            <div className="cell-preview cell-preview-error">
+              🔥️{previewCellView.error}
             </div>
-          )
+          ))
         }
       />
     </form>
