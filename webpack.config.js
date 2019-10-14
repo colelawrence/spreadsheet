@@ -3,18 +3,19 @@
 
 const path = require("path")
 const HtmlWebpackPlugin = require("html-webpack-plugin")
+const TerserPlugin = require("terser-webpack-plugin")
 
 /** @param {string[]} seg */
 const root = (...seg) => path.resolve(__dirname, ...seg)
 
-const isDev = true
+const isDev = !process.env["BUILD_PROD"]
 const useSourcemaps = true
 
 /** @type {import("webpack").Configuration} */
 module.exports = {
   entry: root("src/bootstrap.ts"),
   output: {
-    path: root("dist"),
+    path: root("docs"),
     // webpack has the ability to generate path info in the output bundle. However, this puts garbage collection pressure on projects that bundle thousands of modules.
     pathinfo: useSourcemaps,
     devtoolModuleFilenameTemplate:
@@ -58,6 +59,12 @@ module.exports = {
       template: root("index.ejs"),
     }),
   ],
+  stats: {
+    // Examine all modules
+    maxModules: Infinity,
+    // Display bailout reasons
+    optimizationBailout: true,
+  },
   optimization: isDev
     ? {
         removeAvailableModules: false,
@@ -66,7 +73,25 @@ module.exports = {
       }
     : {
         minimize: true,
+        minimizer: [
+          new TerserPlugin({
+            cache: true,
+            parallel: true,
+            sourceMap: useSourcemaps, // Must be set to true if using source-maps in production
+            terserOptions: {
+              output: {
+                comments: false
+              }
+              // https://github.com/webpack-contrib/terser-webpack-plugin#terseroptions
+            },
+          }),
+        ],
         removeEmptyChunks: true,
         usedExports: true,
+        providedExports: true,
+        mergeDuplicateChunks: true,
+        sideEffects: true,
+        removeAvailableModules: true,
+        concatenateModules: true,
       },
 }
