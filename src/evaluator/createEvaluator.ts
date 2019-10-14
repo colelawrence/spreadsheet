@@ -1,7 +1,7 @@
 import { BehaviorSubject, combineLatest, Observable } from "rxjs"
 import { map, mergeMap } from "rxjs/operators"
 import { dbg } from "../helpers"
-import { CellNode, ExprNode } from "../parser/parseCell"
+import { ExprNode } from "../parser/parseCell"
 import { CellValue, CellView } from "../table"
 
 export type EvaluatorFn = () => Observable<CellView>

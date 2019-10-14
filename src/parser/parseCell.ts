@@ -36,6 +36,7 @@ export type ExprNode<Ref> =
   | {
       kind: "op"
       left: ExprNode<Ref>
+      /** example "+", "-", etc */
       jsEvalOp: string
       right: ExprNode<Ref>
     }
