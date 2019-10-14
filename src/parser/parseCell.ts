@@ -3,10 +3,14 @@ export enum TablePosition {
   Relative = 1,
 }
 
+/** Positioning kind, column name */
 export type ParsedColumnLocation = [TablePosition, string]
-export type ParsedRowLocation = [TablePosition, number]
+/** Positioning kind, row name */
+export type ParsedRowLocation = [TablePosition, string]
 
+// TODO: Reference regexp is tied to axisNames... perhaps these pieces deserve to be grouped
 const REFERENCE_RE = /^\s*(\$?)([A-Z]{1,3})(\$?)([0-9]+)\s*$/
+
 const JS_OPERATION_RE = /^(.+?)\s*([\+\-\/]|\*{1,2})\s*(.+)$/
 
 /** Top level cell text entry */
@@ -115,17 +119,17 @@ function parseLiteral(input: string): ParserExprNode | void {
 function parseReference(input: string): ParserExprNode | void {
   const matches = REFERENCE_RE.exec(input)
   if (matches != null) {
-    const [_, isStaticColumn, column, isStaticRow, row] = matches
+    const [_, isStaticColumn, columnName, isStaticRow, rowName] = matches
     return {
       kind: "reference",
       ref: {
         column: [
           isStaticColumn ? TablePosition.Static : TablePosition.Relative,
-          column,
+          columnName,
         ],
         row: [
           isStaticRow ? TablePosition.Static : TablePosition.Relative,
-          parseInt(row),
+          rowName,
         ],
       },
     }
@@ -139,6 +143,6 @@ export function parsedReferenceToString(
   const colPrefix = col[0] === TablePosition.Static ? "$" : ""
   const colPart = colPrefix + col[1]
   const rowPrefix = row[0] === TablePosition.Static ? "$" : ""
-  const rowPart = rowPrefix + row[1].toString(10)
+  const rowPart = rowPrefix + row[1]
   return colPart + rowPart
 }

@@ -1,30 +1,31 @@
+import cloneDeepWith from "lodash/cloneDeepWith"
 import {
   BehaviorSubject,
+  combineLatest,
   Observable,
   of,
   throwError,
-  combineLatest,
 } from "rxjs"
 import {
   debounceTime,
+  distinctUntilChanged,
   map,
   mergeMap,
-  distinctUntilChanged,
 } from "rxjs/operators"
-import { COLUMN_TO_INDEX, COLUMNS_BY_INDEX } from "./columns"
+import { axisNames } from "./axisNames"
 import { createExprEvaluatorFn } from "./evaluator/createEvaluator"
-import { dbg, genId, moveAfter, moveBefore } from "./helpers"
-import {
-  ParsedColumnLocation,
-  ParsedRowLocation,
-  TablePosition,
-  CellNode,
-  ParserCellRef,
-  ExprNode,
-  parsedReferenceToString,
-  parseCell,
-} from "./parser/parseCell"
+import { genId, moveAfter, moveBefore, expectNotNull } from "./helpers"
 import { mapExprReferences } from "./parser/mapExprReferences"
+import {
+  CellNode,
+  ExprNode,
+  parseCell,
+  ParsedColumnLocation,
+  parsedReferenceToString,
+  ParsedRowLocation,
+  ParserCellRef,
+  TablePosition,
+} from "./parser/parseCell"
 
 type TableRowLocation =
   | [TablePosition.Relative, number]
@@ -89,14 +90,41 @@ type CellEditor = {
 export class ColRef {
   public id = genId("Col")
 }
+
 export class RowRef {
   public id = genId("Row")
 }
 
 export interface Cell {
+  /** @internal to Table, todo: set up separate ViewCell model */
+  _copyProperties(): CellProperties
+
   $properties: Observable<CellProperties>
   $view: Observable<CellView>
   editCell(): CellEditor
+}
+
+function createExpressionGenerator(): () => CellExpressionValid {
+  let i = 0
+  return () => {
+    i++
+    return {
+      state: "valid",
+      valid:
+        i > 26
+          ? {
+              kind: "empty",
+            }
+          : i % 2 === 0
+          ? {
+              kind: "number",
+              value: i,
+            }
+          : {
+              kind: "empty",
+            },
+    }
+  }
 }
 
 export class Table {
@@ -107,16 +135,21 @@ export class Table {
   constructor(size: { rows: number; cols: number }) {
     const cols = new Array(size.cols).fill(undefined).map(_ => new ColRef())
     const rows = new Array(size.rows).fill(undefined).map(_ => new RowRef())
+    let gen = createExpressionGenerator()
     for (const col of cols) {
       const rowCellMap = new WeakMap<RowRef, Cell>()
       for (const row of rows) {
-        rowCellMap.set(row, this.createCell(col, row))
+        rowCellMap.set(row, this.createCell(col, row, { expression: gen() }))
       }
       this.cells.set(col, rowCellMap)
     }
     this.$columnOrder.next(cols)
     this.$rowOrder.next(rows)
   }
+
+  //
+  // #region Column operations
+  //
 
   moveColumnAfter(colRef: ColRef, after: ColRef) {
     this.$columnOrder.next(moveAfter(this.$columnOrder.value, colRef, after))
@@ -125,6 +158,40 @@ export class Table {
   moveColumnBefore(colRef: ColRef, before: ColRef) {
     this.$columnOrder.next(moveBefore(this.$columnOrder.value, colRef, before))
   }
+
+  copyColumnToAfter(fromColRef: ColRef, after: ColRef) {
+    const copiedColumn = this.copyColumn(fromColRef)
+    this.moveColumnAfter(copiedColumn, after)
+  }
+
+  copyColumnToBefore(fromColRef: ColRef, before: ColRef): void {
+    const copiedColumn = this.copyColumn(fromColRef)
+    this.moveColumnBefore(copiedColumn, before)
+  }
+
+  copyColumn(fromColRef: ColRef): ColRef {
+    const newColRef = new ColRef()
+    const rowCellMap = new WeakMap<RowRef, Cell>()
+    for (const row of this.$rowOrder.value) {
+      rowCellMap.set(
+        row,
+        this.createCell(
+          fromColRef,
+          row,
+          this.getCell(fromColRef, row)._copyProperties(),
+        ),
+      )
+    }
+    // notice that since this.cells is a WeakMap, if we drop our ColRef, our copied cells should get GC'd
+    this.cells.set(newColRef, rowCellMap)
+    return newColRef
+  }
+
+  // #endregion Column operations
+
+  //
+  // #region Parsing operations
+  //
 
   private mapParsedExprRefsToTableCellRefs(
     contextCol: ColRef,
@@ -187,6 +254,12 @@ export class Table {
     }
   }
 
+  // #endregion Parsing operations
+
+  //
+  // #region Create cell
+  //
+
   private createCell(
     col: ColRef,
     row: RowRef,
@@ -201,6 +274,13 @@ export class Table {
 
     const parseThisCellInput = this.parseCellInput.bind(this, col, row)
     return {
+      _copyProperties() {
+        return cloneDeepWith($properties.value, value => {
+          // maintain ref connections
+          if (value instanceof ColRef) return value
+          if (value instanceof RowRef) return value
+        })
+      },
       $properties: $properties.asObservable(),
       $view,
       editCell: () => {
@@ -250,7 +330,7 @@ export class Table {
    * Future:
    *  - properties.displayFormat could be a thing that changes the view display
    */
-  evaluateCell(
+  private evaluateCell(
     col: ColRef,
     row: RowRef,
     { expression }: CellProperties,
@@ -305,6 +385,12 @@ export class Table {
     }
   }
 
+  // #endregion Create cell
+
+  //
+  // #region Cell tracking
+  //
+
   /**
    * Retrieve an observable of the latest CellView based on TableCellLocation,
    * When row order changes, and cell is relatively located, then a new value
@@ -319,6 +405,16 @@ export class Table {
       this.lookupColumn(contextCol, tableLocation.column),
       this.lookupRow(contextRow, tableLocation.row),
     ).pipe(mergeMap(([colRef, rowRef]) => this.getCellView(colRef, rowRef)))
+  }
+
+  private getCellView = (col: ColRef, row: RowRef): Observable<CellView> => {
+    try {
+      return this.getCell(col, row).$view
+    } catch (error) {
+      console.error(`getCell does not exist`, error)
+      // @ts-ignore
+      return throwError("Cell does not exist")
+    }
   }
 
   private lookupColumn = (
@@ -371,6 +467,12 @@ export class Table {
     }
   }
 
+  // #endregion Cell tracking
+
+  //
+  // #region Cell parsing and evaluation
+  //
+
   private getCellInputValueFromProperties(
     col: ColRef,
     row: RowRef,
@@ -388,7 +490,9 @@ export class Table {
           case "text":
             return String(cellNode.value)
           case "expression":
-            return "=" + this.convertExprToString(col, row, cellNode.expression)
+            return (
+              "=" + this.convertCellExprToString(col, row, cellNode.expression)
+            )
           default:
             const exhaust: never = cellNode
             return exhaust
@@ -399,7 +503,7 @@ export class Table {
     }
   }
 
-  private convertExprToString(
+  private convertCellExprToString(
     ctxCol: ColRef,
     ctxRow: RowRef,
     expr: ExprNode<TableCellLocation>,
@@ -408,8 +512,8 @@ export class Table {
       case "literal":
         return expr.jsEvalLiteral
       case "op":
-        const left = this.convertExprToString(ctxCol, ctxRow, expr.left)
-        const right = this.convertExprToString(ctxCol, ctxRow, expr.right)
+        const left = this.convertCellExprToString(ctxCol, ctxRow, expr.left)
+        const right = this.convertCellExprToString(ctxCol, ctxRow, expr.right)
         return left + expr.jsEvalOp + right
       case "reference":
         return this.convertTableLocationToString(ctxCol, ctxRow, expr.ref)
@@ -450,29 +554,29 @@ export class Table {
     if (location[0] === TablePosition.Relative) {
       const rel = location[1]
       const fromIndex = this.$columnOrder.value.indexOf(from)
-      const column = COLUMNS_BY_INDEX[fromIndex + rel]!
+      const column = axisNames.columnIndexToName(fromIndex + rel)!
       return [TablePosition.Relative, column]
     } else {
       // position is static
       const index = this.$columnOrder.value.indexOf(location[1])
-      return [TablePosition.Static, COLUMNS_BY_INDEX[index]!]
+      return [TablePosition.Static, axisNames.columnIndexToName(index)!]
     }
   }
 
   // TODO: purify
   private lookupParsedColumnLocation = (
     from: ColRef,
-    [pos, idx]: ParsedColumnLocation,
+    [pos, name]: ParsedColumnLocation,
   ): TableColumnLocation => {
     if (pos === TablePosition.Relative) {
-      const toIndex = COLUMN_TO_INDEX.get(idx)!
+      const toIndex = axisNames.columnNameToIndex(name)!
       const fromIndex = this.$columnOrder.value.indexOf(from)
       // make wrapping possible with double letters, TODO: fix typescript !
       const rel = toIndex - fromIndex
       return [TablePosition.Relative, rel]
     } else {
       // position is static
-      const toIndex = COLUMN_TO_INDEX.get(idx)!
+      const toIndex = axisNames.columnNameToIndex(name)!
       return [TablePosition.Static, this.$columnOrder.value[toIndex]]
     }
   }
@@ -480,13 +584,15 @@ export class Table {
   // TODO: purify
   private lookupParsedRowLocation = (
     from: RowRef,
-    [pos, idx]: ParsedRowLocation,
+    [pos, name]: ParsedRowLocation,
   ): TableRowLocation => {
     if (pos === TablePosition.Relative) {
       const fromIndex = this.$rowOrder.value.indexOf(from)
+      const idx = axisNames.rowNameToIndex(name)!
       const rel = idx - fromIndex
       return [TablePosition.Relative, rel]
     } else {
+      const idx = axisNames.rowNameToIndex(name)!
       return [TablePosition.Static, this.$rowOrder.value[idx]]
     }
   }
@@ -499,27 +605,23 @@ export class Table {
     if (location[0] === TablePosition.Relative) {
       const rel = location[1]
       const fromIndex = this.$rowOrder.value.indexOf(from)
-      const row = fromIndex + rel
-      return [TablePosition.Relative, row]
+      const rowName = axisNames.rowIndexToName(fromIndex + rel)
+      return [TablePosition.Relative, rowName]
     } else {
       // position is static
       const index = this.$rowOrder.value.indexOf(location[1])
-      return [TablePosition.Static, index]
+      const rowName = axisNames.rowIndexToName(index)
+      return [TablePosition.Static, rowName]
     }
   }
 
-  private getCellView = (col: ColRef, row: RowRef): Observable<CellView> => {
-    try {
-      return this.getCell(col, row).$view
-    } catch (error) {
-      console.error(`getCell does not exist`, error)
-      // @ts-ignore
-      return throwError("Cell does not exist")
-    }
-  }
+  // #endregion Cell parsing and evaluation
 
   /** @throws if cell does not exist */
   getCell = (col: ColRef, row: RowRef): Cell => {
-    return this.cells.get(col)!.get(row)!
+    return expectNotNull(
+      expectNotNull(this.cells.get(col), "Column not found").get(row),
+      "Row not found",
+    )
   }
 }

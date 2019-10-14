@@ -1,14 +1,15 @@
 import "behavior-state/react"
 import React, { useMemo, useState } from "react"
 import { combineLatest } from "rxjs"
-import { COLUMNS_BY_INDEX } from "./columns"
 import {
   changeValue,
   onEnterOrClick,
   preventDefaultThen,
   classnames,
+  onEnterOrDoubleClick,
 } from "./helpers"
 import { Cell, CellView, ColRef, RowRef, Table } from "./table"
+import { axisNames } from "./axisNames"
 
 export function SpreadsheetApp({ table }: { table: Table }) {
   const $rowsAndColumns = combineLatest(table.$rowOrder, table.$columnOrder)
@@ -29,16 +30,21 @@ export function SpreadsheetApp({ table }: { table: Table }) {
         <tr>
           <th></th>
           <table.$columnOrder.react
-            next={colRefs =>
+            next={(colRefs: ColRef[]) =>
               colRefs.map((colRef, idx) => {
-                const label = COLUMNS_BY_INDEX[idx]
+                const label = axisNames.columnIndexToName(idx)
                 return (
                   <th key={label}>
                     {idx > 0 && (
                       <a
-                        {...onEnterOrClick(() =>
-                          table.moveColumnBefore(colRef, colRefs[idx - 1]),
-                        )}
+                        className="column-header-move-btn"
+                        {...onEnterOrClick(event => {
+                          if (event.altKey) {
+                            table.copyColumnToBefore(colRef, colRefs[idx])
+                          } else {
+                            table.moveColumnBefore(colRef, colRefs[idx - 1])
+                          }
+                        })}
                       >
                         ←
                       </a>
@@ -46,9 +52,14 @@ export function SpreadsheetApp({ table }: { table: Table }) {
                     {label}
                     {idx < colRefs.length - 1 && (
                       <a
-                        {...onEnterOrClick(() =>
-                          table.moveColumnAfter(colRef, colRefs[idx + 1]),
-                        )}
+                        className="column-header-move-btn"
+                        {...onEnterOrClick(event => {
+                          if (event.altKey) {
+                            table.copyColumnToAfter(colRef, colRefs[idx])
+                          } else {
+                            table.moveColumnAfter(colRef, colRefs[idx + 1])
+                          }
+                        })}
                       >
                         →
                       </a>
@@ -63,18 +74,21 @@ export function SpreadsheetApp({ table }: { table: Table }) {
       <tbody>
         <$rowsAndColumns.react
           next={([rowRefs, columnRefs]) =>
-            rowRefs.map((rowRef, idx) => (
-              <tr key={rowRef.id}>
-                <td className="table-row-number">{idx}</td>
-                {columnRefs.map(colRef => (
-                  <CellViewMemo
-                    key={colRef.id}
-                    colRef={colRef}
-                    rowRef={rowRef}
-                  />
-                ))}
-              </tr>
-            ))
+            rowRefs.map((rowRef, idx) => {
+              const label = axisNames.rowIndexToName(idx)
+              return (
+                <tr key={rowRef.id}>
+                  <td className="table-row-number">{label}</td>
+                  {columnRefs.map(colRef => (
+                    <CellViewMemo
+                      key={colRef.id}
+                      colRef={colRef}
+                      rowRef={rowRef}
+                    />
+                  ))}
+                </tr>
+              )
+            })
           }
         />
       </tbody>
@@ -113,7 +127,7 @@ function CellController({ cell }: { cell: Cell }) {
             !cellView.ok && "cell-display-error",
             cellView.formula && "cell-display-formula",
           )}
-          {...onEnterOrClick(() => setEditing(EditingState.Editing))}
+          {...onEnterOrDoubleClick(() => setEditing(EditingState.Editing))}
           ref={elt => {
             // Recapture focus if next state has element focused
             if (editingState === EditingState.Focused && elt != null) {

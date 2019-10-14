@@ -7,6 +7,14 @@ export const genId = (suffix: string) =>
   "@" +
   suffix
 
+export const expectNotNull = <T> (element: T | null | undefined, message: string): T => {
+  if (element == null) {
+    throw new Error(message)
+  } else {
+    return element
+  }
+}
+
 /** helper for use with onChange functions */
 export function changeValue(
   handler: (value: string) => void,
@@ -25,13 +33,14 @@ export function preventDefaultThen(
 }
 
 /** helper for responding to enter key and click events */
-export function onEnterOrClick(fn: () => void): React.HTMLAttributes<unknown> {
+export function onEnterOrClick(
+  fn: (
+    event: React.MouseEvent<unknown, MouseEvent> | React.KeyboardEvent<unknown>,
+  ) => void,
+): React.HTMLAttributes<unknown> {
   return {
     tabIndex: 0,
-    onClick: evt => {
-      evt.stopPropagation()
-      fn()
-    },
+    onClickCapture: fn,
     onKeyDown: evt => {
       if (evt.key === "Enter") {
         evt.stopPropagation()
@@ -41,9 +50,27 @@ export function onEnterOrClick(fn: () => void): React.HTMLAttributes<unknown> {
             evt.currentTarget instanceof HTMLAnchorElement
           )
         ) {
-          // onClick will handle this one
-          fn()
+          // onClick will handle others
+          fn(evt)
         }
+      }
+    },
+  }
+}
+
+/** helper for responding to enter key events */
+export function onEnterOrDoubleClick(
+  fn: (
+    event: React.MouseEvent<unknown, MouseEvent> | React.KeyboardEvent<unknown>,
+  ) => void,
+): React.HTMLAttributes<unknown> {
+  return {
+    tabIndex: 0,
+    onDoubleClickCapture: fn,
+    onKeyDown: evt => {
+      if (evt.key === "Enter") {
+        evt.stopPropagation()
+        fn(evt)
       }
     },
   }
