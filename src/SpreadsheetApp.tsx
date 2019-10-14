@@ -8,7 +8,7 @@ import {
   preventDefaultThen,
   classnames,
 } from "./helpers"
-import { Cell, CellView, ColRef, RowRef, Table } from "./sheet"
+import { Cell, CellView, ColRef, RowRef, Table } from "./table"
 
 export function SpreadsheetApp({ table }: { table: Table }) {
   const $rowsAndColumns = combineLatest(table.$rowOrder, table.$columnOrder)
@@ -151,6 +151,8 @@ function CellEditor({
           <input
             alt="Update expression input"
             type="text"
+            // Make small so as to not disrupt size of table cells
+            size={2}
             value={exprValue}
             onChange={changeValue(edit.updateExpressionValue)}
             onBlur={() => {

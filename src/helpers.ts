@@ -55,5 +55,16 @@ export function classnames(
   return names.filter(a => !!a).join(" ")
 }
 
+export function moveAfter<T>(arr: T[], move: T, after: T): T[] {
+  const head = arr.filter(existing => existing !== move)
+  const tail = head.splice(head.indexOf(after) + 1)
+  return [...head, move, ...tail]
+}
 
-export const dbg = console.info.bind(console, '%cDebug', 'color: green')
+export function moveBefore<T>(arr: T[], move: T, before: T): T[] {
+  const head = arr.filter(existing => existing !== move)
+  const tail = head.splice(head.indexOf(before))
+  return [...head, move, ...tail]
+}
+
+export const dbg = console.info.bind(console, "%cDebug", "color: green")

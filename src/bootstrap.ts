@@ -1,7 +1,7 @@
 import { render } from "react-dom"
 import React from "react"
 import { SpreadsheetApp } from "./SpreadsheetApp"
-import { Table } from "./sheet"
+import { Table } from "./table"
 
 const appElt = document.getElementById("app-container")
 

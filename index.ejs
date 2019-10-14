@@ -17,6 +17,11 @@
     table {
         border-collapse: collapse;
     }
+    .table-row-number {
+        font-size: 65%;
+        padding-right: .5rem;
+        color: #4f4f81;
+    }
     .cell {
         border-right: 1px solid #3e3e5d;
         border-top: 1px solid #3e3e5d;
@@ -37,13 +42,36 @@
         color: orange;
         font-size: 65%;
     }
-    .table-row-number {
+    .cell-display {
+        position: relative;
+        color: orange;
         font-size: 65%;
-        padding-right: .5rem;
-        color: #4f4f81;
+    }
+    .cell-display-formula {
+        padding-left: 1.25em;
+    }
+    .cell-display-formula::before {
+        position: absolute;
+        content: "=";
+        left: .2rem;
     }
     .cell-display-number {
         text-align: right;
+    }
+    .cell-editing {
+        padding: 0;
+        position: relative;
+    }
+    .cell-editing input {
+        display: block;
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        border: none;
+        outline: 2px solid dodgerblue;
+    }
+    .cell-editing input:focus {
+        outline-offset: 0px;
     }
     </style>
 </head>
